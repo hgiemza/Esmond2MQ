@@ -74,6 +74,7 @@ class Esmond2MQ(object):
         
         self.metadata_count = 0
         self.events_count = dict(zip(self.EVENT_TYPES, len(self.EVENT_TYPES)*[0]))
+        self.empty_events_count = dict(zip(self.EVENT_TYPES, len(self.EVENT_TYPES)*[0]))
         self.messages_count = dict(zip(self.EVENT_TYPES, len(self.EVENT_TYPES)*[0]))
         
         self.getraw_time = 0.001    # div/0 protection
@@ -285,6 +286,8 @@ class Esmond2MQ(object):
                 self.getraw_time = self.getraw_time + end_time - start_time
                 
                 self.events_count[event_type] = self.events_count[event_type] + 1
+                if data['event']['raw'] is None:
+                    self.empty_events_count[event_type] = self.empty_events_count[event_type] + 1
                 
                 self.__profiling_lock.release()
             
@@ -396,13 +399,14 @@ class Esmond2MQ(object):
         
         self.__summary_count = self.__summary_count + 1
         events_sum = sum(self.events_count.values())
+        empty_events_sum = sum(self.empty_events_count.values())
         messages_sum = sum(self.messages_count.values())
         run_time = time.time() - self.__start_time
         
-        if messages_sum <> 0:
-            ratio = abs(messages_sum - events_sum) / float(messages_sum) * 100
+        if events_sum == 0:
+            empty_ratio = 0
         else:
-            ratio = 100
+            empty_ratio = empty_events_sum / float(events_sum) * 100
         
         self.log.debug("Printing summary %d" % self.__summary_count)
         print "\n----SUMMARY %d----" % self.__summary_count
@@ -424,7 +428,12 @@ class Esmond2MQ(object):
         print "\nMessages sent: %d" % messages_sum
         print " Types: %s" % self.messages_count
         
-        print "\nEmpty raw data: %.0f%%" % ratio
+        print "\nEmpty raw data (total): %.0f%% (%d/%d)" % (empty_ratio, empty_events_sum, events_sum)
+        for event_type, count in self.events_count.items():
+            if count > 0:
+                empty_count = self.empty_events_count[event_type]
+                print " %s: %.0f%% (%d/%d)" % (event_type, empty_count/float(count) * 100, empty_count, count)
+        
         print "Run time: %ds" % run_time
         print "---------------"
         sys.stdout.flush()
