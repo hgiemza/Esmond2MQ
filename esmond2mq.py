@@ -241,6 +241,7 @@ class Esmond2MQ(object):
         """
         Request the raw data for events stored in preprocessing queue.
         Put the result (meta + raw data) in the postprocessing queue.
+        Discard metadata if raw data is empty.
         
         Function is run in parallel by worker threads.
         """
@@ -253,19 +254,39 @@ class Esmond2MQ(object):
             except Queue.Empty:
                 continue
             
-            # request raw data and join result with the event object
-            start_time = time.time()
-            
-            # fetch raw data from the last self.RAW_DATA_TIME_RANGE seconds and narrow to the last result
+            # fetch raw data from the last self.RAW_DATA_TIME_RANGE seconds, 
+            # narrow to the last result and join with event object
             # TODO: check correctness of this solution
             filter = '?format=json&time-range=%d' % self.RAW_DATA_TIME_RANGE
+            
+            start_time = time.time()
             raw_data = self.__sendRequest(self.__esmond_url + data['event']["base-uri"] + filter)
+            end_time = time.time()
+            
             data['event']['raw_count'] = len(raw_data)
             
             try:
                 data['event']['raw'] = [raw_data.pop()]
             except IndexError:
-                data['event']['raw'] = []
+                data['event']['raw'] = None
+                self.log.warn('Empty raw data.')
+                
+                measurement = dict(data['measurement'])
+                measurement['event-types'] = [data['event']]
+                self.log.debug(measurement)
+                
+                continue
+                
+            finally:
+                # profiling
+                event_type = data['event']['event-type']
+
+                self.__profiling_lock.acquire()
+                self.getraw_time = self.getraw_time + end_time - start_time
+                
+                self.events_count[event_type] = self.events_count[event_type] + 1
+                
+                self.__profiling_lock.release()
             
             # put the data in the postprocessing queue
             while not self.__stopped:
@@ -275,17 +296,6 @@ class Esmond2MQ(object):
                     continue
                 else:
                     break
-            
-            # profiling
-            duration = time.time() - start_time
-            event_type = data['event']['event-type']
-            
-            self.__profiling_lock.acquire()
-            
-            self.getraw_time = self.getraw_time + duration
-            self.events_count[event_type] = self.events_count[event_type] + 1
-            
-            self.__profiling_lock.release()
             
     def __sendMessages(self):
         """
@@ -300,54 +310,44 @@ class Esmond2MQ(object):
             except Queue.Empty:
                 continue
             
-            # prepare and send messages (only events which actually have some raw data)
-            start_time = time.time()
-            if len(data['event']['raw']) > 0:
-                
-                event_type = data['event']['event-type']
-                
-                message = Message(
-                                  body = json.dumps(data['event']),
-                                  header = {
+            # prepare and send messages
+            event_type = data['event']['event-type']
+            
+            message = Message(
+                                body = json.dumps(data['event']),
+                                header = {
                                             'destination': '/topic/perfsonar.' + event_type,
                                             'time': "%s" % time.time(),
                                             'source_host': data['measurement']['source'],
-                                            'destination_host': data['measurement']['destination'],
-                                            'raw_count': data['event']['raw_count']
-                                           }
-                                 )
+                                            'destination_host': data['measurement']['destination']
+                                         }
+                             )
+            
+            # send the message
+            while not self.__stopped:
                 
-                # send the message
-                while not self.__stopped:
+                self.log.debug("Sending message: %s" % message.header)
+                try:
+                    self.__connection.send(message.body, **message.header)
+                except stomp.exception.NotConnectedException:
+                    self.log.warn("Could not send a message. Trying to reconnect...")
                     
-                    self.log.debug("Sending message: %s" % message.header)
-                    try:
-                        self.__connection.send(message.body, **message.header)
-                    except stomp.exception.NotConnectedException:
-                        self.log.warn("Could not send a message. Trying to reconnect...")
-                        
-                        # wait until new connection is established
-                        while not self.__stopped:
-                            try:
-                                self.__connectToBroker()
-                            except stomp.exception.ConnectFailedException:
-                                self.log.error("Failed to reconnect.")
-                            else:
-                                break
-                        
-                    # message was succesfully sent - break the loop
-                    else:
-                        break
+                    # wait until new connection is established
+                    while not self.__stopped:
+                        try:
+                            self.__connectToBroker()
+                        except stomp.exception.ConnectFailedException:
+                            self.log.error("Failed to reconnect.")
+                        else:
+                            break
                 
-                # profiling
-                self.messages_count[event_type] = self.messages_count[event_type] + 1
-                
-            else:
-                measurement = dict(data['measurement'])
-                measurement['event-types'] = []
-                measurement['event-types'].append(data['event'])
-                self.log.warn('Measurement with empty raw data:\n%s' % measurement)
-        
+                # message was succesfully sent - break the loop
+                else:
+                    break
+            
+            # profiling
+            self.messages_count[event_type] = self.messages_count[event_type] + 1
+            
     def startPublishing(self):
         
         self.log.info('Starting Esmond publisher.')
