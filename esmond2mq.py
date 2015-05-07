@@ -216,7 +216,8 @@ class Esmond2MQ(object):
                     
                     # filter out relevant events
                     event_type = event["event-type"]
-                    if event_type in self.EVENT_TYPES and event["time-updated"] >= start_time and event["time-updated"] <= end_time:
+                    if event_type in self.EVENT_TYPES and event["time-updated"] >= int(start_time) and event["time-updated"] <= int(end_time):
+                        
                         
                         # add the object to the preprocessing queue
                         data = {'measurement': measurement, 'event': event}
@@ -450,7 +451,7 @@ class DebugListener(MessageListener):
     def message(self, message):
         self.log.debug("""New message:
 =====================================HEADER====================================
-%s, %s, %s (src), %s (dst), %s (raw count)
+%s, %s, %s (src), %s (dst)
 ======================================BODY=====================================
 %s""" %
                             (
@@ -458,7 +459,6 @@ class DebugListener(MessageListener):
                              message.header.get("time"), \
                              message.header.get("source_host"), \
                              message.header.get("destination_host"), \
-                             message.header.get("raw_count"), \
                              message.get_body()
                             )
                            )
@@ -470,8 +470,8 @@ if __name__ == "__main__":
     # logging
     format = '%(asctime)s, %(module)s(%(threadName)s), %(levelname)s: %(message)s'
     logging.basicConfig(format=format)
-    logging.getLogger(__name__ + "Esmond2MQ").setLevel(logging.WARN)
-    logging.getLogger(__name__ + "DebugListener").setLevel(logging.WARN)
+    logging.getLogger(__name__ + "Esmond2MQ").setLevel(logging.INFO)
+    logging.getLogger(__name__ + "DebugListener").setLevel(logging.ERROR)
     
     # create test instance and start publishing
     esmond_publisher = Esmond2MQ()
